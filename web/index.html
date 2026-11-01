@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Route Engine</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Overpass is derived from Highway Gothic, the US road-sign typeface. -->
+<link href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #fafaf7;
+    --ink: #1d2329;
+    --muted: #5b6670;
+    --rule: #d9dcd6;
+    --sign-green: #00694b;   /* US guide-sign green: the route and the readout */
+    --sign-text: #ffffff;
+    --interstate: #003f87;   /* selection */
+    --explored: #e8a200;     /* warning-sign amber: nodes the search touched */
+    --start: #003f87;
+    --end: #b3261e;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #151c22;
+      --ink: #e8ece9;
+      --muted: #9aa6ae;
+      --rule: #2c363e;
+      --interstate: #6fa8ff;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: "Overpass", "Helvetica Neue", Arial, sans-serif;
+    color: var(--ink); background: var(--paper);
+    display: grid; grid-template-columns: 340px 1fr; height: 100%;
+  }
+  aside { padding: 24px 22px; overflow-y: auto; border-right: 1px solid var(--rule); }
+  h1 { font-size: 1.6rem; font-weight: 800; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .hint { color: var(--muted); font-size: 0.92rem; line-height: 1.45; margin: 0 0 20px; }
+  fieldset { border: 0; padding: 0; margin: 0 0 18px; }
+  legend { font-weight: 600; font-size: 0.95rem; margin-bottom: 8px; }
+  .algo {
+    display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: baseline;
+    padding: 9px 10px; border: 1px solid var(--rule); border-radius: 6px; margin-bottom: 6px;
+    cursor: pointer;
+  }
+  .algo input { margin: 0; accent-color: var(--interstate); }
+  .algo strong { font-weight: 600; }
+  .algo span { grid-column: 2; color: var(--muted); font-size: 0.85rem; line-height: 1.35; }
+  .algo:has(input:checked) { border-color: var(--interstate); box-shadow: inset 3px 0 0 var(--interstate); }
+  .algo:has(input:focus-visible) { outline: 2px solid var(--interstate); outline-offset: 2px; }
+
+  /* The readout is drawn as a highway guide sign. */
+  .sign {
+    background: var(--sign-green); color: var(--sign-text);
+    border-radius: 10px; padding: 14px 16px; margin: 0 0 18px;
+    border: 3px solid var(--sign-green); outline: 2px solid var(--sign-text); outline-offset: -7px;
+  }
+  .sign .big { font-size: 2.1rem; font-weight: 800; line-height: 1.05; }
+  .sign .big small { font-size: 1.1rem; font-weight: 600; }
+  .sign .rows { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; margin-top: 8px; font-size: 0.95rem; }
+  .sign .rows b { font-weight: 800; text-align: right; font-variant-numeric: tabular-nums; }
+  .sign.empty .big { font-size: 1.15rem; font-weight: 600; }
+
+  button {
+    font: inherit; font-weight: 600; width: 100%; padding: 10px; border-radius: 6px;
+    border: 1px solid var(--interstate); background: transparent; color: var(--interstate); cursor: pointer;
+  }
+  button:hover { background: color-mix(in srgb, var(--interstate) 10%, transparent); }
+  button:focus-visible { outline: 2px solid var(--interstate); outline-offset: 2px; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 4px; text-align: right; border-bottom: 1px solid var(--rule); }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-weight: 600; color: var(--muted); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover td { background: color-mix(in srgb, var(--interstate) 8%, transparent); }
+  .note { color: var(--muted); font-size: 0.8rem; margin-top: 8px; line-height: 1.4; }
+  .error { color: var(--end); font-weight: 600; }
+  #map { height: 100%; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 60vh; }
+    aside { border-right: 0; border-bottom: 1px solid var(--rule); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Route Engine</h1>
+  <p class="hint">Click the map to set a start, then a destination. Drag either pin to try another route. Amber dots are the intersections the search examined.</p>
+
+  <div id="sign" class="sign empty"><div class="big">Pick two points on the map</div></div>
+
+  <fieldset id="algos">
+    <legend>Search algorithm</legend>
+    <label class="algo"><input type="radio" name="algo" value="bfs"><strong>BFS</strong>
+      <span>Fewest road segments. Ignores distance, so the route can be long.</span></label>
+    <label class="algo"><input type="radio" name="algo" value="ucs"><strong>UCS</strong>
+      <span>Dijkstra. Shortest route, expands outward in every direction.</span></label>
+    <label class="algo"><input type="radio" name="algo" value="biucs"><strong>Bidirectional UCS</strong>
+      <span>Searches from both ends until the two frontiers meet.</span></label>
+    <label class="algo"><input type="radio" name="algo" value="astar" checked><strong>A*</strong>
+      <span>UCS guided toward the goal by straight-line distance.</span></label>
+    <label class="algo"><input type="radio" name="algo" value="alt"><strong>ALT</strong>
+      <span>A* with landmark distances, a much sharper estimate.</span></label>
+  </fieldset>
+
+  <button id="compare" disabled>Compare all five</button>
+  <table id="results" hidden>
+    <thead><tr><th>Algorithm</th><th>km</th><th>Explored</th><th>ms</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <p class="note" id="note"></p>
+</aside>
+<div id="map"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+const NAMES = { bfs: "BFS", ucs: "UCS", biucs: "Bidirectional UCS", astar: "A*", alt: "ALT" };
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const map = L.map("map", { preferCanvas: true });
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+
+const explored = L.layerGroup().addTo(map);
+const routeLayer = L.layerGroup().addTo(map);
+const pin = color => L.divIcon({
+  className: "", iconSize: [18, 18], iconAnchor: [9, 9],
+  html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:3px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.4)"></div>`,
+});
+let start = null, end = null;
+const cache = {};  // last result per algorithm, for the compare table
+
+fetch("/api/info").then(r => r.json()).then(info => {
+  map.fitBounds(info.bounds);
+  if (!info.landmarks) document.querySelector('input[value="alt"]').disabled = true;
+  document.getElementById("note").textContent =
+    `${info.nodes.toLocaleString()} intersections, ${info.edges.toLocaleString()} road segments, ${info.landmarks} landmarks.`;
+});
+
+function placeMarker(latlng, which) {
+  const m = L.marker(latlng, { draggable: true, icon: pin(which === "start" ? css("--start") : css("--end")),
+                               keyboard: false }).addTo(map);
+  m.on("dragend", () => run());
+  return m;
+}
+
+map.on("click", e => {
+  if (!start || (start && end)) {
+    if (start) map.removeLayer(start);
+    if (end) map.removeLayer(end);
+    start = placeMarker(e.latlng, "start");
+    end = null;
+    explored.clearLayers(); routeLayer.clearLayers();
+    setSign(null, "Now pick a destination");
+    document.getElementById("compare").disabled = true;
+  } else {
+    end = placeMarker(e.latlng, "end");
+    document.getElementById("compare").disabled = false;
+    run();
+  }
+});
+
+document.getElementById("algos").addEventListener("change", () => run());
+document.getElementById("compare").addEventListener("click", compareAll);
+
+const currentAlgo = () => document.querySelector('input[name="algo"]:checked').value;
+const fmt = (n, d = 0) => Number(n).toLocaleString(undefined, { maximumFractionDigits: d, minimumFractionDigits: d });
+
+async function fetchRoute(algo) {
+  const a = start.getLatLng(), b = end.getLatLng();
+  const url = `/api/route?from=${a.lat},${a.lng}&to=${b.lat},${b.lng}&algo=${algo}&explored=20000`;
+  const r = await fetch(url);
+  if (!r.ok) throw new Error((await r.text()) || r.statusText);
+  const data = await r.json();
+  if (data.error) throw new Error(data.error);
+  cache[algo] = data;
+  return data;
+}
+
+async function run(algo = currentAlgo()) {
+  if (!start || !end) return;
+  try { draw(await fetchRoute(algo)); }
+  catch (err) { setSign(null, null, err.message); }
+}
+
+function draw(res) {
+  explored.clearLayers(); routeLayer.clearLayers();
+  const dot = { radius: 2, stroke: false, fillColor: css("--explored"), fillOpacity: 0.55 };
+  for (const p of res.explored) L.circleMarker(p, dot).addTo(explored);
+  if (res.found) {
+    L.polyline(res.path, { color: "#ffffff", weight: 9, opacity: 0.9 }).addTo(routeLayer);
+    L.polyline(res.path, { color: css("--sign-green"), weight: 5 }).addTo(routeLayer);
+  }
+  setSign(res);
+}
+
+function setSign(res, message, error) {
+  const sign = document.getElementById("sign");
+  if (!res) {
+    sign.className = "sign empty";
+    sign.innerHTML = `<div class="big">${error ? `Couldn't route: ${error}` : message}</div>`;
+    return;
+  }
+  sign.className = "sign";
+  const shown = res.explored.length < res.expanded
+    ? `<span>Dots on map</span><b>first ${fmt(res.explored.length)}</b>` : "";
+  sign.innerHTML = res.found
+    ? `<div class="big">${fmt(res.meters / 1000, 2)} <small>km</small></div>
+       <div class="rows"><span>${NAMES[res.algorithm]}</span><b>${fmt(res.ms, 1)} ms</b>
+       <span>Intersections explored</span><b>${fmt(res.expanded)}</b>${shown}</div>`
+    : `<div class="big">No route between these points</div>`;
+}
+
+async function compareAll() {
+  const btn = document.getElementById("compare");
+  btn.disabled = true; btn.textContent = "Comparing…";
+  const body = document.querySelector("#results tbody");
+  body.innerHTML = "";
+  try {
+    for (const algo of Object.keys(NAMES)) {
+      if (document.querySelector(`input[value="${algo}"]`).disabled) continue;
+      const r = await fetchRoute(algo);
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${NAMES[algo]}</td><td>${r.found ? fmt(r.meters / 1000, 2) : "none"}</td>
+                      <td>${fmt(r.expanded)}</td><td>${fmt(r.ms, 1)}</td>`;
+      tr.addEventListener("click", () => {
+        document.querySelector(`input[value="${algo}"]`).checked = true;
+        draw(cache[algo]);
+      });
+      body.appendChild(tr);
+    }
+    document.getElementById("results").hidden = false;
+    draw(cache[currentAlgo()]);
+  } catch (err) { setSign(null, null, err.message); }
+  btn.disabled = false; btn.textContent = "Compare all five";
+}
+</script>
+</body>
+</html>
