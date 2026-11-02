@@ -175,11 +175,8 @@ int serve(const std::string& path, const Options& opt) {
     std::ostringstream out;
     out.precision(7);
     if (cmd == "info") {
-      double lat_sum = 0, lon_sum = 0;
       double min_lat = 90, max_lat = -90, min_lon = 180, max_lon = -180;
       for (NodeId v = 0; v < g.num_nodes(); ++v) {
-        lat_sum += g.lat[v];
-        lon_sum += g.lon[v];
         min_lat = std::min(min_lat, g.lat[v]);
         max_lat = std::max(max_lat, g.lat[v]);
         min_lon = std::min(min_lon, g.lon[v]);
@@ -198,6 +195,8 @@ int serve(const std::string& path, const Options& opt) {
         out << "{\"error\":\"usage: route lat1 lon1 lat2 lon2 algorithm max_explored\"}";
       } else if (a == Algorithm::kALT && !router.has_landmarks()) {
         out << "{\"error\":\"ALT is off: the server was started with --landmarks 0\"}";
+      } else if (g.main_scc_size == 0) {
+        out << "{\"error\":\"the graph has no roads\"}";
       } else {
         NodeId s = g.nearest_node(lat1, lon1), t = g.nearest_node(lat2, lon2);
         SearchResult r = router.route(a, s, t, cap);

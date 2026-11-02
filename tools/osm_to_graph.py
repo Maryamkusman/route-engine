@@ -16,13 +16,14 @@ Ann Arbor / Detroit area:
 
 import argparse
 import math
-import struct
 import sys
 import time
 from array import array
 
 import numpy as np
 import osmium
+
+from graph_file import write_graph
 
 # Road types a car can use. Footways, cycleways, tracks etc. are skipped.
 DRIVABLE = {
@@ -101,22 +102,6 @@ class RoadHandler(osmium.SimpleHandler):
             if d <= 0:
                 self.src.append(cur_id); self.dst.append(prev_id); self.w.append(meters)
             prev, prev_id = n, cur_id
-
-
-def write_graph(path, lat, lon, src, dst, w):
-    n, m = len(lat), len(src)
-    order = np.argsort(src, kind="stable")
-    counts = np.bincount(src, minlength=n)
-    offsets = np.zeros(n + 1, dtype=np.uint32)
-    np.cumsum(counts, out=offsets[1:])
-    with open(path, "wb") as f:
-        f.write(b"RTEG")
-        f.write(struct.pack("<IQQ", 1, n, m))
-        f.write(np.asarray(lat, dtype="<f8").tobytes())
-        f.write(np.asarray(lon, dtype="<f8").tobytes())
-        f.write(offsets.astype("<u4").tobytes())
-        f.write(dst[order].astype("<u4").tobytes())
-        f.write(w[order].astype("<f4").tobytes())
 
 
 def main():

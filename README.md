@@ -56,6 +56,18 @@ The full state works too; the converter needs several GB of RAM for it.
     pip install flask
     python web/app.py data/se-michigan.bin     # http://localhost:8000
 
+## Deploy
+
+The Dockerfile builds the engine, runs the tests, and serves the demo with
+gunicorn on `$PORT` (default 8000). It uses `data/map.bin` if present,
+otherwise a synthetic map.
+
+    docker build -t route-engine .
+    docker run -p 8000:8000 route-engine
+
+A 1M-node map needs roughly 250 MB of RAM, so free 512 MB hosting tiers fit.
+Run one gunicorn worker: each worker loads its own copy of the graph.
+
 ## Layout
 
     src/graph.*        CSR road graph, binary file format, SCC, nearest node

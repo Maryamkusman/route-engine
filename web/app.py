@@ -17,6 +17,7 @@ import subprocess
 import threading
 
 from flask import Flask, abort, jsonify, request, send_from_directory
+from werkzeug.exceptions import HTTPException
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ALGORITHMS = ("bfs", "ucs", "biucs", "astar", "alt")
@@ -65,10 +66,29 @@ def create_app(engine):
         algo = request.args.get("algo", "astar")
         if algo not in ALGORITHMS:
             abort(400, f"algo must be one of {', '.join(ALGORITHMS)}")
-        explored = max(0, min(int(request.args.get("explored", 8000)), 50000))
+        explored = max(0, min(request.args.get("explored", 8000, type=int), 50000))
         return jsonify(engine.ask(f"route {lat1} {lon1} {lat2} {lon2} {algo} {explored}"))
 
+    # Errors as JSON, so the page can show the message instead of an HTML page.
+    @app.errorhandler(HTTPException)
+    def http_error(e):
+        return jsonify(error=e.description), e.code
+
     return app
+
+
+def app_from_env():
+    """Entry point for a production server, configured by environment:
+
+        ROUTE_GRAPH=data/map.bin gunicorn -w 1 --threads 8 --chdir web "app:app_from_env()"
+
+    Use one worker: each worker starts its own engine and its own copy of the
+    graph. Threads are fine, since the engine serves one request at a time.
+    """
+    engine = Engine(os.environ.get("ROUTE_ENGINE", os.path.join(HERE, "..", "build", "route_engine")),
+                    os.environ["ROUTE_GRAPH"], int(os.environ.get("ROUTE_LANDMARKS", 8)))
+    engine.ask("info")
+    return create_app(engine)
 
 
 def main():
@@ -78,6 +98,8 @@ def main():
     ap.add_argument("--landmarks", type=int, default=8)
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
+    if not os.path.exists(args.engine):
+        ap.exit(1, f"no engine at {args.engine}; build it first (see README)\n")
     engine = Engine(args.engine, args.graph, args.landmarks)
     engine.ask("info")  # blocks until the graph and landmarks are loaded
     create_app(engine).run(port=args.port, threaded=True)

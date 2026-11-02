@@ -13,7 +13,7 @@ import argparse
 
 import numpy as np
 
-from osm_to_graph import write_graph
+from graph_file import write_graph
 
 EARTH_RADIUS_M = 6371008.8
 
